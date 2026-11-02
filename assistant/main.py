@@ -2,6 +2,7 @@
 import asyncio
 import base64
 import logging
+import secrets
 import time
 from datetime import datetime
 from datetime import time as dtime
@@ -131,6 +132,34 @@ class Bot:
             ]])
             await bot.send_message(chat_id, f"Needs your approval (#{pid}):\n\n{row['summary']}"[:4000],
                                    reply_markup=kb)
+        if len(pending_ids) > 1:  # many deletions etc.: one tap instead of one per action
+            token = self.new_batch(pending_ids)
+            kb = InlineKeyboardMarkup([[
+                InlineKeyboardButton(f"✅ Approve all {len(pending_ids)}", callback_data=f"okall:{token}"),
+                InlineKeyboardButton("❌ Reject all", callback_data=f"noall:{token}"),
+            ]])
+            await bot.send_message(chat_id, f"{len(pending_ids)} actions are waiting (#"
+                                   + ", #".join(map(str, pending_ids)) + ").", reply_markup=kb)
+
+    def new_batch(self, pending_ids: list[int]) -> str:
+        token = secrets.token_hex(4)  # button data is limited to 64 bytes, so store the ids
+        self.db.set(f"batch:{token}", pending_ids)
+        return token
+
+    async def resolve_batch(self, token: str, approve: bool) -> str:
+        ids = self.db.get(f"batch:{token}") or []
+        results = [await self.agent.resolve_action(pid, approve=approve) for pid in ids]
+        if not approve:
+            return f"Rejected {sum(r.startswith('Rejected') for r in results)} of {len(ids)}. Nothing was done."
+        done = sum(r.startswith("Done") for r in results)
+        failed = [f"#{pid}: {r[:200]}" for pid, r in zip(ids, results) if r.startswith("It failed")]
+        skipped = len(ids) - done - len(failed)
+        lines = [f"Done ✅ {done} of {len(ids)}."]
+        if skipped:
+            lines.append(f"{skipped} already handled earlier.")
+        if failed:
+            lines.append("Failed ❌:\n" + "\n".join(failed))
+        return "\n".join(lines)
 
     # ------------------------------------------------ shared by all apps
     def link_secret(self) -> str:
@@ -439,8 +468,11 @@ class Bot:
             await q.answer("Not allowed")
             return
         await q.answer()
-        kind, pid = q.data.split(":")
-        result = await self.agent.resolve_action(int(pid), approve=(kind == "ok"))
+        kind, ref = q.data.split(":", 1)
+        if kind in ("okall", "noall"):
+            result = await self.resolve_batch(ref, approve=kind == "okall")
+        else:
+            result = await self.agent.resolve_action(int(ref), approve=(kind == "ok"))
         await q.edit_message_reply_markup(None)
         await q.message.reply_text(result[:4000])
 

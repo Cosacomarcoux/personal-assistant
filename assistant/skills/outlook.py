@@ -6,6 +6,7 @@ from .. import microsoft
 from .base import Skill, Tool, schema
 
 MAX_BODY = 8000
+MAX_EVENTS = 250  # per call; beyond this the tool says so instead of silently cutting
 TEXT_BODY = {"Prefer": 'outlook.body-content-type="text"'}
 LIST_FIELDS = "id,subject,from,receivedDateTime,isRead,bodyPreview,conversationId"
 
@@ -131,16 +132,29 @@ def outlook_calendar_list(a, ctx):
     now = datetime.now(_tz(ctx))
     start = _local(a["start"], ctx) if a.get("start") else now.replace(hour=0, minute=0, second=0, microsecond=0)
     end = _local(a["end"], ctx) if a.get("end") else now + timedelta(days=7)
-    window = {"startDateTime": start.isoformat(), "endDateTime": end.isoformat(), "$top": 100,
-              "$select": "id,subject,start,end,isAllDay,location,attendees,onlineMeeting,webLink"}
-    events, failed = [], []
+    window = {"startDateTime": start.isoformat(), "endDateTime": end.isoformat(), "$top": 250,
+              "$select": "id,subject,start,end,isAllDay,location,attendees,onlineMeeting,webLink,bodyPreview"}
+    query = (a.get("query") or "").lower()
+    events, failed, more = [], [], False
     for cal in _calendars(ctx):
+        items, path, params = [], f"/me/calendars/{cal['id']}/calendarView", window
         try:
-            res = _g(ctx, f"/me/calendars/{cal['id']}/calendarView", params=window)
+            while True:  # follow Outlook's pages until the period is covered
+                res = _g(ctx, path, params=params)
+                items += res.get("value", [])
+                link = res.get("@odata.nextLink")
+                if not link or len(items) >= MAX_EVENTS:
+                    more = more or bool(link)
+                    break
+                path, params = link.split("/v1.0", 1)[1], None
         except Exception:  # one shared calendar failing shouldn't hide the rest
             failed.append(cal.get("name"))
             continue
-        for e in res.get("value", []):
+        for e in items:
+            text = " ".join([e.get("subject") or "", (e.get("location") or {}).get("displayName") or "",
+                             e.get("bodyPreview") or ""]).lower()
+            if query and query not in text:
+                continue
             all_day = bool(e.get("isAllDay"))
             events.append({
                 "id": e["id"], "title": e.get("subject") or "(no title)", "calendar": cal.get("name"),
@@ -149,6 +163,11 @@ def outlook_calendar_list(a, ctx):
                 "attendees": [_who(x) for x in e.get("attendees", [])][:10],
                 "teams_link": (e.get("onlineMeeting") or {}).get("joinUrl")})
     events.sort(key=lambda e: e["start"] if not e["all_day"] else e["start"] + "T00:00")
+    if len(events) > MAX_EVENTS:
+        events, more = events[:MAX_EVENTS], True
+    if more:
+        events.append({"note": f"Only the first {MAX_EVENTS} events are shown; there are more. "
+                               "Use a shorter period or a query to see the rest."})
     if failed:
         events.append({"note": f"Could not read calendar(s): {', '.join(failed)}"})
     return events or "No events in that period."
@@ -226,8 +245,10 @@ class OutlookSkill(Skill):
                             ["message_ids"]), outlook_archive, needs_approval=True,
                      describe=lambda a: f"🗄 Archive {len(a.get('message_ids', []))} Outlook email(s)"),
                 Tool("outlook_calendar_list",
-                     "Events from all Outlook calendars between start and end (ISO). Default: today to +7 days.",
-                     schema({"start": {"type": "string"}, "end": {"type": "string"}}),
+                     "Events from all Outlook calendars between start and end (ISO). Default: today to "
+                     "+7 days. Use a query to find events over long periods.",
+                     schema({"start": {"type": "string"}, "end": {"type": "string"},
+                             "query": {"type": "string", "description": "Words in title, place or notes"}}),
                      outlook_calendar_list),
                 Tool("outlook_create_event", "Book an Outlook calendar event. Requires approval.",
                      schema({"title": {"type": "string"}, "start": {"type": "string"},

@@ -1081,3 +1081,99 @@ def test_teams_reminder_is_delivered(tmp_path, monkeypatch):
     bot.db.execute("INSERT INTO reminders(chat_id, text, due_at) VALUES(1,'ring mamma',?)", (past,))
     asyncio.run(bot.job_reminders())
     assert _texts() == ["⏰ Reminder: ring mamma"]
+
+
+class PagedCalendar:
+    """A Google calendar with many events, served 250 at a time like the real API."""
+    def __init__(self, n_events, match_every=10):
+        self.n, self.every, self.calls = n_events, match_every, []
+
+    def calendarList(self):
+        return NS(list=lambda pageToken=None: NS(execute=lambda: {"items": [{"id": "me", "summary": "Mitt"}]}))
+
+    def events(self):
+        def list_(calendarId, pageToken=None, maxResults=250, q=None, **kw):
+            self.calls.append({"page": pageToken, "q": q})
+            items = [{"id": f"e{i}", "summary": f"Snöläge möte {i}" if i % self.every == 0 else f"Annat {i}",
+                      "start": {"dateTime": f"2027-01-01T{8 + i % 10:02d}:00:00+08:00"},
+                      "end": {"dateTime": f"2027-01-01T{9 + i % 10:02d}:00:00+08:00"}}
+                     for i in range(self.n) if not q or i % self.every == 0]
+            start = int(pageToken or 0)
+            page = items[start:start + maxResults]
+            more = start + maxResults < len(items)
+            return NS(execute=lambda: {"items": page, **({"nextPageToken": str(start + maxResults)} if more else {})})
+        return NS(list=list_)
+
+
+def test_calendar_search_covers_long_periods(tmp_path, monkeypatch):
+    from assistant.skills import google_workspace as gw
+    from assistant.skills.base import ToolContext
+    agent, db, _ = make(tmp_path, [])
+    ctx = ToolContext(db=db, config=agent.config, chat_id=1)
+    cal = PagedCalendar(600)
+    monkeypatch.setattr(gw, "_svc", lambda ctx, name, version: cal)
+    found = gw.calendar_list_events({"start": "2026-10-01", "end": "2027-12-31", "query": "Snöläge"}, ctx)
+    assert len(found) == 60 and all("Snöläge" in e["title"] for e in found)  # every match, no cut
+    assert cal.calls[0]["q"] == "Snöläge"
+    everything = gw.calendar_list_events({"start": "2026-10-01", "end": "2027-12-31"}, ctx)
+    assert len(everything) == gw.MAX_EVENTS + 1 and "there are more" in everything[-1]["note"]  # says so
+
+
+def test_approve_all(tmp_path):
+    agent, db, client = make(tmp_path, [
+        ([tool_use(f"t{i}", "calendar_delete_event", {"event_id": f"e{i}", "title": f"Snöläge {i}"})
+          for i in range(3)], "tool_use"),
+        ([text("Tre borttagningar väntar på ditt godkännande.")], "end_turn"),
+    ])
+    deleted = []
+    agent.tools["calendar_delete_event"].handler = lambda a, c: deleted.append(a["event_id"]) or "Event deleted."
+    reply = asyncio.run(agent.handle(1, "ta bort snöläge"))
+    assert len(reply.pending_ids) == 3 and deleted == []  # one step, three requests, nothing done yet
+    from assistant import main
+    bot = NS(db=db, agent=agent)
+    token = main.Bot.new_batch(bot, reply.pending_ids)
+    asyncio.run(agent.resolve_action(reply.pending_ids[0], approve=True))  # one tapped by hand first
+    summary = asyncio.run(main.Bot.resolve_batch(bot, token, approve=True))
+    assert sorted(deleted) == ["e0", "e1", "e2"]  # each runs exactly once
+    assert summary.startswith("Done ✅ 2 of 3.") and "1 already handled" in summary
+    assert "Rejected 0 of 3" in asyncio.run(main.Bot.resolve_batch(bot, token, approve=False))
+
+
+def test_teams_approve_all_card(tmp_path, monkeypatch):
+    bot = _teams_bot(tmp_path, monkeypatch, [
+        ([tool_use(f"t{i}", "calendar_delete_event", {"event_id": f"e{i}"}) for i in range(2)], "tool_use"),
+        ([text("Två väntar.")], "end_turn"),
+    ])
+    deleted = []
+    bot.agent.tools["calendar_delete_event"].handler = lambda a, c: deleted.append(a["event_id"]) or "Event deleted."
+    asyncio.run(bot.teams.process(_activity("ta bort båda")))
+    batch = FakeTeamsHttp.posts[-1][1]["attachments"][0]["content"]
+    approve_all = batch["actions"][0]
+    assert approve_all["title"] == "✅ Approve all 2" and deleted == []
+    asyncio.run(bot.teams.process(_activity("", value=approve_all["data"])))
+    assert sorted(deleted) == ["e0", "e1"] and _texts()[-1].startswith("Done ✅ 2 of 2.")
+
+
+def test_honesty_rules_in_prompt(tmp_path):
+    agent, db, client = make(tmp_path, [])
+    rules = agent.system_prompt()[0]["text"]
+    assert "Never say an action is queued" in rules and "cannot approve actions yourself" in rules
+
+
+def test_telegram_shows_approve_all(tmp_path):
+    from assistant import main
+    cfg = Config()
+    cfg.data_dir = tmp_path
+    bot = main.Bot(cfg)
+    ids = [bot.db.execute("INSERT INTO pending_actions(chat_id, tool, args, summary) VALUES(1,'calendar_delete_event','{}','x')")
+           for _ in range(25)]
+    sent = []
+
+    async def send_message(chat_id, text, reply_markup=None):
+        sent.append((text, reply_markup))
+    asyncio.run(bot.send_approvals(1, ids, NS(send_message=send_message)))
+    assert len(sent) == 26  # one per action, then one for all
+    buttons = sent[-1][1].inline_keyboard[0]
+    assert buttons[0].text == "✅ Approve all 25" and buttons[0].callback_data.startswith("okall:")
+    assert all(len(b.callback_data.encode()) <= 64 for b in buttons)
+    assert bot.db.get("batch:" + buttons[0].callback_data.split(":")[1]) == ids

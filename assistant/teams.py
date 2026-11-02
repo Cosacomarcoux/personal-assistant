@@ -62,6 +62,18 @@ def approval_card(pid: int, summary: str) -> dict:
     }}]}
 
 
+def batch_card(token: str, pending_ids: list[int]) -> dict:
+    n = len(pending_ids)
+    return {"type": "message", "attachments": [{"contentType": CARD, "content": {
+        "type": "AdaptiveCard", "version": "1.4",
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "body": [{"type": "TextBlock", "wrap": True, "weight": "Bolder",
+                  "text": f"{n} actions are waiting (#" + ", #".join(map(str, pending_ids)) + ")"}],
+        "actions": [{"type": "Action.Submit", "title": f"✅ Approve all {n}", "data": {"ragnar": "okall", "batch": token}},
+                    {"type": "Action.Submit", "title": "❌ Reject all", "data": {"ragnar": "noall", "batch": token}}],
+    }}]}
+
+
 class Teams:
     def __init__(self, bot):
         self.bot = bot  # the assistant's Bot (main.py): agent, db, config, commands
@@ -116,6 +128,10 @@ class Teams:
         if value.get("ragnar") in ("ok", "no"):  # an approval card was answered
             result = await self.bot.agent.resolve_action(int(value["pid"]), approve=value["ragnar"] == "ok")
             await self.send_text(result, ref)
+            return
+        if value.get("ragnar") in ("okall", "noall"):
+            await self.send_text(await self.bot.resolve_batch(str(value["batch"]),
+                                                              approve=value["ragnar"] == "okall"), ref)
             return
 
         await self.typing(ref)
@@ -203,6 +219,8 @@ class Teams:
         for pid in reply.pending_ids:
             row = self.bot.db.query("SELECT summary FROM pending_actions WHERE id=?", (pid,))[0]
             await self.post(approval_card(pid, row["summary"]), ref)
+        if len(reply.pending_ids) > 1:
+            await self.post(batch_card(self.bot.new_batch(reply.pending_ids), reply.pending_ids), ref)
 
 
 # --------------------------------------------------------------- app package

@@ -177,6 +177,9 @@ def calendar_list(args, ctx):
             for c in _calendars(svc)]
 
 
+MAX_EVENTS = 250  # per call; beyond this the tool says so instead of silently cutting
+
+
 def calendar_list_events(args, ctx):
     svc = _svc(ctx, "calendar", "v3")
     now = datetime.now(_tz(ctx))
@@ -186,27 +189,42 @@ def calendar_list_events(args, ctx):
         cals = [{"id": _calendar_id(svc, args["calendar"]), "summary": args["calendar"]}]
     else:
         cals = _calendars(svc)
-    events, failed = [], []
+    search = {"q": args["query"]} if args.get("query") else {}
+    events, failed, more = [], [], False
     for cal in cals:
         name = cal.get("summaryOverride") or cal.get("summary") or cal["id"]
-        try:
-            res = svc.events().list(calendarId=cal["id"], timeMin=start, timeMax=end,
-                                    singleEvents=True, orderBy="startTime", maxResults=50).execute()
-        except Exception:  # one broken/unshared calendar shouldn't hide the others
-            failed.append(name)
-            continue
-        events += [{
-            "id": e["id"], "title": e.get("summary", "(no title)"),
-            "calendar": name, "calendar_id": cal["id"],
-            "start": e["start"].get("dateTime", e["start"].get("date")),
-            "end": e["end"].get("dateTime", e["end"].get("date")),
-            "location": e.get("location"),
-            "attendees": [a.get("email") for a in e.get("attendees", [])][:10],
-        } for e in res.get("items", [])]
+        page = None
+        while True:
+            try:
+                res = svc.events().list(calendarId=cal["id"], timeMin=start, timeMax=end, singleEvents=True,
+                                        orderBy="startTime", maxResults=250, pageToken=page, **search).execute()
+            except Exception:  # one broken/unshared calendar shouldn't hide the others
+                failed.append(name)
+                break
+            events += [{
+                "id": e["id"], "title": e.get("summary", "(no title)"),
+                "calendar": name, "calendar_id": cal["id"],
+                "start": e["start"].get("dateTime", e["start"].get("date")),
+                "end": e["end"].get("dateTime", e["end"].get("date")),
+                "location": e.get("location"),
+                "attendees": [a.get("email") for a in e.get("attendees", [])][:10],
+                **({"description": (e.get("description") or "")[:150]} if search else {}),
+            } for e in res.get("items", [])]
+            page = res.get("nextPageToken")
+            if not page:
+                break
+            if len(events) >= MAX_EVENTS:
+                more = True
+                break
     events.sort(key=lambda e: _sort_key(e["start"], ctx))
+    if len(events) > MAX_EVENTS:
+        events, more = events[:MAX_EVENTS], True
+    if more:
+        events.append({"note": f"Only the first {MAX_EVENTS} events are shown; there are more. "
+                               "Use a shorter period or a query to see the rest."})
     if failed:
         events.append({"note": f"Could not read calendar(s): {', '.join(failed)}"})
-    return events[:100] or "No events in that period."
+    return events or "No events in that period."
 
 
 def calendar_create_event(args, ctx):
@@ -305,8 +323,11 @@ class GoogleSkill(Skill):
                      schema({}), calendar_list),
                 Tool("calendar_list_events",
                      "List events from all calendars between start and end (ISO). "
-                     "Defaults: today to +7 days. Optionally limit to one calendar.",
+                     "Defaults: today to +7 days. Optionally limit to one calendar, or search "
+                     "(query matches title, description, location and guests) - use a query "
+                     "to find events over long periods.",
                      schema({"start": {"type": "string"}, "end": {"type": "string"},
+                             "query": {"type": "string", "description": "Words to search for, e.g. 'Snöläge'"},
                              "calendar": {"type": "string",
                                           "description": "Calendar name or id; omit for all"}}),
                      calendar_list_events),
