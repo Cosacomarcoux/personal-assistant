@@ -127,10 +127,14 @@ EMAIL_PROPS = {
 
 
 def _describe_email(a):
-    return f"📧 Send email\nTo: {a.get('to')}\nSubject: {a.get('subject')}\n\n{a.get('body', '')[:1500]}"
+    return f"📧 Enviar mail\nPara: {a.get('to')}\nAsunto: {a.get('subject')}\n\n{a.get('body', '')[:1500]}"
 
 
 # ------------------------------------------------------------- Calendar
+REPEAT = {"daily": "DAILY", "weekly": "WEEKLY", "monthly": "MONTHLY", "yearly": "YEARLY"}
+REPEAT_ES = {"daily": "todos los días", "weekly": "todas las semanas", "monthly": "todos los meses", "yearly": "todos los años"}
+
+
 def _tz(ctx):
     return ZoneInfo(ctx.config.timezone)
 
@@ -243,6 +247,11 @@ def calendar_create_event(args, ctx):
             "description": args.get("description", ""), "location": args.get("location", "")}
     if args.get("attendees"):
         body["attendees"] = [{"email": e.strip()} for e in args["attendees"].split(",")]
+    if args.get("repeat") in REPEAT:  # e.g. birthdays every year, salaries every month
+        body["recurrence"] = [f"RRULE:FREQ={REPEAT[args['repeat']]}"]
+    if args.get("remind_minutes_before") is not None:  # Google's own phone notification
+        body["reminders"] = {"useDefault": False, "overrides": [
+            {"method": "popup", "minutes": max(0, min(40320, int(args["remind_minutes_before"])))}]}
     ev = svc.events().insert(calendarId=_calendar_id(svc, args.get("calendar")), body=body,
                              sendUpdates="all" if args.get("attendees") else "none").execute()
     return f"Event created: {ev.get('htmlLink')}"
@@ -302,7 +311,11 @@ class GoogleSkill(Skill):
                 "calendar_list_events reads ALL the user's calendars (e.g. 'Familj') and "
                 "tags each event with its calendar. Before creating an event, check for "
                 "conflicts. New events go to the primary calendar unless the user names one. "
-                "Dates/times are ISO format in the user's timezone, e.g. 2026-10-21T14:00."
+                "Dates/times are ISO format in the user's timezone, e.g. 2026-10-21T14:00. "
+                "Things that repeat get repeat=yearly/monthly/weekly/daily (birthdays: an "
+                "all-day yearly event; paying salaries on the 5th: a monthly event). Use "
+                "remind_minutes_before so Google itself notifies the user's phone; for all-day "
+                "events it counts back from midnight, so 900 = 9:00 the day before."
             ),
             tools=[
                 Tool("gmail_search", "Search Gmail. Returns id, sender, subject, date, snippet.",
@@ -318,7 +331,7 @@ class GoogleSkill(Skill):
                 Tool("gmail_archive", "Archive emails (remove from inbox, mark read). Requires approval.",
                      schema({"message_ids": {"type": "array", "items": {"type": "string"}}},
                             ["message_ids"]), gmail_archive, needs_approval=True,
-                     describe=lambda a: f"🗄 Archive {len(a.get('message_ids', []))} email(s)"),
+                     describe=lambda a: f"🗄 Archivar {len(a.get('message_ids', []))} mail(s)"),
                 Tool("calendar_list", "List the user's Google calendars (names and ids).",
                      schema({}), calendar_list),
                 Tool("calendar_list_events",
@@ -327,7 +340,7 @@ class GoogleSkill(Skill):
                      "(query matches title, description, location and guests) - use a query "
                      "to find events over long periods.",
                      schema({"start": {"type": "string"}, "end": {"type": "string"},
-                             "query": {"type": "string", "description": "Words to search for, e.g. 'Snöläge'"},
+                             "query": {"type": "string", "description": "Words to search for, e.g. 'cumpleaños'"},
                              "calendar": {"type": "string",
                                           "description": "Calendar name or id; omit for all"}}),
                      calendar_list_events),
@@ -337,14 +350,22 @@ class GoogleSkill(Skill):
                              "location": {"type": "string"}, "description": {"type": "string"},
                              "attendees": {"type": "string", "description": "Comma-separated emails"},
                              "calendar": {"type": "string",
-                                          "description": "Calendar name or id; default primary"}},
+                                          "description": "Calendar name or id; default primary"},
+                             "repeat": {"type": "string", "enum": list(REPEAT),
+                                        "description": "Repeat the event; omit for a one-off"},
+                             "remind_minutes_before": {"type": "integer",
+                                                       "description": "Phone notification from Google"}},
                             ["title", "start"]),
                      calendar_create_event, needs_approval=True,
-                     describe=lambda a: (f"📅 New event: {a.get('title')}\nStart: {a.get('start')}"
-                                         f"\nEnd: {a.get('end', '(1 hour)')}"
-                                         + (f"\nWith: {a['attendees']}" if a.get("attendees") else "")
-                                         + (f"\nWhere: {a['location']}" if a.get("location") else "")
-                                         + (f"\nCalendar: {a['calendar']}" if a.get("calendar") else ""))),
+                     describe=lambda a: (f"📅 Evento nuevo: {a.get('title')}\nInicio: {a.get('start')}"
+                                         + ("\nTodo el día" if a.get("all_day")
+                                            else f"\nFin: {a.get('end', '(1 hora)')}")
+                                         + (f"\nSe repite: {REPEAT_ES[a['repeat']]}" if a.get("repeat") in REPEAT_ES else "")
+                                         + (f"\nAviso: {a['remind_minutes_before']} min antes"
+                                            if a.get("remind_minutes_before") is not None else "")
+                                         + (f"\nCon: {a['attendees']}" if a.get("attendees") else "")
+                                         + (f"\nDónde: {a['location']}" if a.get("location") else "")
+                                         + (f"\nCalendario: {a['calendar']}" if a.get("calendar") else ""))),
                 Tool("calendar_delete_event", "Delete a calendar event. Requires approval.",
                      schema({"event_id": {"type": "string"},
                              "calendar_id": {"type": "string",
@@ -353,7 +374,7 @@ class GoogleSkill(Skill):
                                        "description": "Event title, shown to the user for approval"}},
                             ["event_id"]),
                      calendar_delete_event, needs_approval=True,
-                     describe=lambda a: f"🗑 Delete event: {a.get('title', a.get('event_id'))}"),
+                     describe=lambda a: f"🗑 Borrar evento: {a.get('title', a.get('event_id'))}"),
                 Tool("drive_search", "Search Google Drive files by name or content.",
                      schema({"query": {"type": "string"}}, ["query"]), drive_search),
                 Tool("drive_read", "Read the text of a Drive file (Docs, Sheets, text).",

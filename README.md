@@ -1,5 +1,7 @@
 # Personal Assistant (Telegram + Claude)
 
+> 🇦🇷 **Guía en español: [GUIA.md](GUIA.md)**. Este fork está configurado para Argentina: español rioplatense, pesos (ARS), hora de Buenos Aires, eventos y recordatorios que se repiten.
+
 Your own AI personal assistant that you chat with on Telegram. It can:
 
 - **Email & calendar**: read and search Gmail, draft and send replies, check and book Google Calendar events, search Google Drive

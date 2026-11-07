@@ -48,33 +48,28 @@ WEEKLY_REVIEW_PROMPT = (
     "want them added to the calendar. Keep it short and motivating."
 )
 
-HELP = """Hi! I'm your personal assistant. Just talk to me normally, e.g.:
+HELP = """¡Hola! Soy tu secretario. Hablame normal, por ejemplo:
 
-• "What's on my calendar tomorrow?"
-• "Any important emails today? Draft a reply to Anna."
-• "Remind me to call mom at 6pm"
-• "Add 'renew passport' to my to-do list"
-• "Research the best eSIM for Japan"
-• "Cheapest flight Taipei → Stockholm in December?"
-• "Translate this" (send a photo of a menu or sign)
-• "Quiz me on Fin Inve" · "Write a report on … as a Word file"
-• "Let's brainstorm video ideas" · "Mom's birthday is 3 May"
-• "I spent 250 on lunch"
-• "Did legs today: squats 3x5 at 100 kg"
-• "Slept 6 hours, left knee aches" (I'll adapt your training)
-You can also send voice messages, and I answer them with voice.
+• "¿Qué tengo mañana en el calendario?"
+• "Recordame llamar a mamá a las 18"
+• "Todos los 5 a las 9 recordame pagar los sueldos"
+• "El cumple de mi hija es el 14 de marzo, agendalo todos los años"
+• "Agregá 'renovar el seguro' a mis pendientes"
+• "Armame un guion de 60 segundos sobre…"
+• "Ideas para videos de esta semana"
+• "Gasté 15.000 en el súper"
+• "Buscá en internet…"
+• Mandame una foto o un PDF y te digo qué es
+También podés mandarme audios, y te contesto con audio.
 
-Commands:
-/connect_google – link Gmail, Calendar & Drive
-/briefing – get your daily briefing now
-/review – weekly training review now
-/connect_microsoft – link Outlook mail, calendar & OneDrive
-/connect_strava – link Strava (workouts from your watch)
-/tasks – show open tasks
-/skills – what I can do
-/talk – hands-free voice mode
-/voice – spoken replies on/off
-/reset – clear our conversation memory (notes and tasks are kept)"""
+Comandos:
+/briefing – tu resumen del día ahora
+/tasks – tus pendientes
+/connect_google – conectar Gmail, Calendar y Drive
+/skills – qué puedo hacer
+/talk – modo manos libres
+/voice – respuestas con voz sí/no
+/reset – borrar la memoria de la charla (tareas y notas quedan)"""
 
 
 MAX_FILE = 20 * 1024 * 1024    # Telegram bots can download up to 20 MB
@@ -107,10 +102,10 @@ class Bot:
             return True
         if not self.config.owner_id:
             await update.effective_message.reply_text(
-                f"Setup step: your Telegram ID is {update.effective_user.id}\n"
-                "Put it in the OWNER_TELEGRAM_ID setting and restart me.")
+                f"Paso de configuración: tu ID de Telegram es {update.effective_user.id}\n"
+                "Ponelo en la variable OWNER_TELEGRAM_ID de Railway y reiniciame.")
         else:
-            await update.effective_message.reply_text("Sorry, I'm a private assistant.")
+            await update.effective_message.reply_text("Perdón, soy un asistente privado.")
         return False
 
     async def send_reply(self, chat_id: int, reply, bot) -> None:
@@ -127,18 +122,18 @@ class Bot:
         for pid in pending_ids:
             row = self.db.query("SELECT summary FROM pending_actions WHERE id=?", (pid,))[0]
             kb = InlineKeyboardMarkup([[
-                InlineKeyboardButton("✅ Approve", callback_data=f"ok:{pid}"),
-                InlineKeyboardButton("❌ Reject", callback_data=f"no:{pid}"),
+                InlineKeyboardButton("✅ Aprobar", callback_data=f"ok:{pid}"),
+                InlineKeyboardButton("❌ Rechazar", callback_data=f"no:{pid}"),
             ]])
-            await bot.send_message(chat_id, f"Needs your approval (#{pid}):\n\n{row['summary']}"[:4000],
+            await bot.send_message(chat_id, f"Necesita tu aprobación (#{pid}):\n\n{row['summary']}"[:4000],
                                    reply_markup=kb)
         if len(pending_ids) > 1:  # many deletions etc.: one tap instead of one per action
             token = self.new_batch(pending_ids)
             kb = InlineKeyboardMarkup([[
-                InlineKeyboardButton(f"✅ Approve all {len(pending_ids)}", callback_data=f"okall:{token}"),
-                InlineKeyboardButton("❌ Reject all", callback_data=f"noall:{token}"),
+                InlineKeyboardButton(f"✅ Aprobar las {len(pending_ids)}", callback_data=f"okall:{token}"),
+                InlineKeyboardButton("❌ Rechazar todas", callback_data=f"noall:{token}"),
             ]])
-            await bot.send_message(chat_id, f"{len(pending_ids)} actions are waiting (#"
+            await bot.send_message(chat_id, f"{len(pending_ids)} acciones esperando (#"
                                    + ", #".join(map(str, pending_ids)) + ").", reply_markup=kb)
 
     def new_batch(self, pending_ids: list[int]) -> str:
@@ -150,15 +145,15 @@ class Bot:
         ids = self.db.get(f"batch:{token}") or []
         results = [await self.agent.resolve_action(pid, approve=approve) for pid in ids]
         if not approve:
-            return f"Rejected {sum(r.startswith('Rejected') for r in results)} of {len(ids)}. Nothing was done."
-        done = sum(r.startswith("Done") for r in results)
-        failed = [f"#{pid}: {r[:200]}" for pid, r in zip(ids, results) if r.startswith("It failed")]
+            return f"Rechacé {sum(r.startswith('Rechazada') for r in results)} de {len(ids)}. No se hizo nada."
+        done = sum(r.startswith("Hecho") for r in results)
+        failed = [f"#{pid}: {r[:200]}" for pid, r in zip(ids, results) if r.startswith("Falló")]
         skipped = len(ids) - done - len(failed)
-        lines = [f"Done ✅ {done} of {len(ids)}."]
+        lines = [f"Hecho ✅ {done} de {len(ids)}."]
         if skipped:
-            lines.append(f"{skipped} already handled earlier.")
+            lines.append(f"{skipped} ya estaban resueltas.")
         if failed:
-            lines.append("Failed ❌:\n" + "\n".join(failed))
+            lines.append("Fallaron ❌:\n" + "\n".join(failed))
         return "\n".join(lines)
 
     # ------------------------------------------------ shared by all apps
@@ -205,64 +200,64 @@ class Bot:
         if strava.is_strava_redirect(text):
             try:
                 strava.finish(self.db, self.config, text)
-                return "Strava connected ✅ Try: 'What did I train this week?'"
+                return "Strava conectado ✅ Probá: '¿Qué entrené esta semana?'"
             except Exception as e:
-                return f"That didn't work: {e}\nTry /connect_strava again."
+                return f"No funcionó: {e}\nProbá /connect_strava de nuevo."
         if google_auth.is_waiting(chat_id):
             try:
                 google_auth.finish(self.db, chat_id, text)
-                return "Google connected ✅ Try: 'What's on my calendar today?'"
+                return "Google conectado ✅ Probá: '¿Qué tengo hoy en el calendario?'"
             except Exception as e:
-                return f"That didn't work: {e}\nTry /connect_google again."
+                return f"No funcionó: {e}\nProbá /connect_google de nuevo."
         return None
 
     def google_text(self, chat_id: int) -> str:
         try:
             url = google_auth.start(self.config, chat_id)
         except Exception as e:
-            return f"Can't start Google connection: {e}"
-        return ("1) Open this link and allow access:\n" + url +
-                "\n\n2) Google may warn the app is unverified – click 'Advanced' → 'Go to … (unsafe)'. "
-                "That's fine: it's your own app.\n"
-                "3) You'll end on a page that says it can't be reached. That's expected! "
-                "Copy the FULL address from the browser bar (starts with http://localhost) "
-                "and paste it here.")
+            return f"No puedo iniciar la conexión con Google: {e}"
+        return ("1) Abrí este link y dale permiso:\n" + url +
+                "\n\n2) Google puede avisar que la app no está verificada: tocá 'Configuración avanzada' → "
+                "'Ir a … (no seguro)'. Está bien, es tu propia app.\n"
+                "3) Vas a terminar en una página que dice que no se puede acceder. ¡Es normal! "
+                "Copiá la dirección COMPLETA de la barra del navegador (empieza con http://localhost) "
+                "y pegala acá.")
 
     def strava_text(self) -> str:
         try:
             url = strava.start(self.config)
         except Exception as e:
-            return f"Can't start Strava connection: {e}"
-        return ("1) Open this link and click 'Authorize':\n" + url +
-                "\n\n2) You'll end on a page that says it can't be reached. That's expected! "
-                "Copy the FULL address from the browser bar (starts with http://localhost) "
-                "and paste it here.")
+            return f"No puedo iniciar la conexión con Strava: {e}"
+        return ("1) Abrí este link y tocá 'Authorize':\n" + url +
+                "\n\n2) Vas a terminar en una página que dice que no se puede acceder. ¡Es normal! "
+                "Copiá la dirección COMPLETA de la barra del navegador (empieza con http://localhost) "
+                "y pegala acá.")
 
     async def microsoft_text(self, send) -> str:
         """Starts the code login; `send` posts the result to the same app when it's done."""
         try:
             flow = await microsoft.start(self.config)
         except Exception as e:
-            return f"Can't start Microsoft connection: {e}"
+            return f"No puedo iniciar la conexión con Microsoft: {e}"
 
         async def finish():
             try:
                 await microsoft.wait_for_login(self.db, self.config, flow)
-                await send("Microsoft connected ✅ (Outlook mail, calendar, OneDrive). "
-                           "Try: 'What's in my Outlook calendar this week?'")
+                await send("Microsoft conectado ✅ (mail y calendario de Outlook, OneDrive). "
+                           "Probá: '¿Qué tengo esta semana en Outlook?'")
             except Exception as e:
-                await send(f"Microsoft connection failed: {e}")
+                await send(f"Falló la conexión con Microsoft: {e}")
         asyncio.get_running_loop().create_task(finish())
-        return (f"1) Open {flow['verification_uri']}\n2) Enter this code: {flow['user_code']}\n"
-                "3) Sign in with your Microsoft account (Outlook / Microsoft 365) and accept.\n"
-                "I'll tell you here when it's done.")
+        return (f"1) Abrí {flow['verification_uri']}\n2) Poné este código: {flow['user_code']}\n"
+                "3) Iniciá sesión con tu cuenta de Microsoft y aceptá.\n"
+                "Te aviso acá cuando esté listo.")
 
     def prompt_for(self, text: str):
         """Commands that are answered by the assistant: (prompt, saved as, use history)."""
         cmd = text.split()[0].lstrip("/").lower() if text.strip() else ""
         return {"briefing": (BRIEFING_PROMPT, BRIEFING_LABEL, False),
                 "review": (WEEKLY_REVIEW_PROMPT, REVIEW_LABEL, None),
-                "tasks": ("Show my open tasks.", None, None)}.get(cmd)
+                "tasks": ("Mostrame mis pendientes abiertos.", None, None)}.get(cmd)
 
     async def command(self, text: str, send) -> str | None:
         """Commands typed in Teams (with or without '/'). None = not a command."""
@@ -273,9 +268,9 @@ class Bot:
             return HELP
         if cmd == "reset":
             self.db.clear_history(self.home_chat)
-            return "Conversation memory cleared."
+            return "Borré la memoria de la charla."
         if cmd == "skills":
-            return "Skills switched on:\n" + "\n".join(f"• {s.name}: {s.description}" for s in self.skills)
+            return "Funciones activadas:\n" + "\n".join(f"• {s.name}: {s.description}" for s in self.skills)
         if cmd == "connect_google":
             return self.google_text(self.home_chat)
         if cmd == "connect_strava":
@@ -284,9 +279,9 @@ class Bot:
             return await self.microsoft_text(send)
         if cmd == "talk":
             if not self.config.web_url:
-                return "The voice page needs a public domain first (Railway → Settings → Networking)."
+                return "La página de voz necesita primero un dominio público (Railway → Settings → Networking)."
             return (f"Hands-free voice page: {self.talk_url()}?k={web.make_key(self.link_secret(), self.home_chat)}"
-                    "\nOpen it, tap the microphone once and talk.")
+                    "\nAbrila, tocá el micrófono una vez y hablá.")
         return None
 
     def voice_mode(self) -> str:
@@ -302,7 +297,7 @@ class Bot:
                                             record_as=record_as)
         except Exception as e:
             log.exception("Agent error")
-            await bot.send_message(chat_id, f"Something went wrong: {e}")
+            await bot.send_message(chat_id, f"Algo salió mal: {e}")
             return
         t1 = time.monotonic()
         await self.send_reply(chat_id, reply, bot)  # text first: shows up while the audio is made
@@ -324,16 +319,16 @@ class Bot:
     async def on_reset(self, update: Update, ctx):
         if await self.guard(update):
             self.db.clear_history(update.effective_chat.id)
-            await update.message.reply_text("Conversation memory cleared.")
+            await update.message.reply_text("Borré la memoria de la charla.")
 
     async def on_skills(self, update: Update, ctx):
         if await self.guard(update):
             lines = [f"• {s.name}: {s.description}" for s in self.skills]
-            await update.message.reply_text("Skills switched on:\n" + "\n".join(lines))
+            await update.message.reply_text("Funciones activadas:\n" + "\n".join(lines))
 
     async def on_tasks(self, update: Update, ctx):
         if await self.guard(update):
-            await self.ask_agent(update.effective_chat.id, "Show my open tasks.", ctx.bot)
+            await self.ask_agent(update.effective_chat.id, "Mostrame mis pendientes abiertos.", ctx.bot)
 
     async def on_briefing(self, update: Update, ctx):
         if await self.guard(update):
@@ -348,17 +343,17 @@ class Bot:
             return
         if not self.config.web_url:
             await update.message.reply_text(
-                "The voice page isn't switched on yet. In Railway: worker → Settings → Networking "
-                "→ Generate Domain (port 8080). Then send /talk again.")
+                "La página de voz todavía no está activada. En Railway: worker → Settings → Networking "
+                "→ Generate Domain (puerto 8080). Después mandá /talk de nuevo.")
             return
         key = web.make_key(self.link_secret(), self.home_chat)
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🎙 Talk to me", web_app=WebAppInfo(self.talk_url()))],
-            [InlineKeyboardButton("🌐 Open in browser", url=f"{self.talk_url()}?k={key}")],
+            [InlineKeyboardButton("🎙 Hablame", web_app=WebAppInfo(self.talk_url()))],
+            [InlineKeyboardButton("🌐 Abrir en el navegador", url=f"{self.talk_url()}?k={key}")],
         ])
         await update.message.reply_text(
-            "Hands-free mode: tap the microphone once, then just talk. I answer out loud and "
-            "listen again. You'll also find it under the 🎙 button next to the message field.",
+            "Modo manos libres: tocá el micrófono una vez y hablá. Te contesto en voz alta y "
+            "vuelvo a escuchar. También está en el botón 🎙 al lado de donde escribís.",
             reply_markup=kb)
 
     async def on_review(self, update: Update, ctx):
@@ -398,10 +393,10 @@ class Bot:
                                           getattr(media, "file_name", None) or "voice.ogg")
         except Exception as e:
             log.exception("Transcription failed")
-            await update.message.reply_text(f"I couldn't listen to that voice message: {e}")
+            await update.message.reply_text(f"No pude escuchar ese audio: {e}")
             return
         if not text:
-            await update.message.reply_text("I couldn't hear any words in that voice message.")
+            await update.message.reply_text("No escuché ninguna palabra en ese audio.")
             return
         log.info("timing: listening %.1fs", time.monotonic() - t0)
         await update.message.reply_text(f"🎤 \"{text[:500]}\"")  # so mishearings are visible
@@ -418,7 +413,7 @@ class Bot:
             media = msg.document
             mime, name = media.mime_type or "", media.file_name or "file"
         if (media.file_size or 0) > MAX_FILE:
-            await msg.reply_text("That file is too big for me (max 20 MB).")
+            await msg.reply_text("Ese archivo es muy grande para mí (máximo 20 MB).")
             return
         await ctx.bot.send_chat_action(chat_id, ChatAction.TYPING)
         data = bytes(await (await media.get_file()).download_as_bytearray())
@@ -432,11 +427,11 @@ class Bot:
                 block = {"type": "text", "text": f"[File: {name}]\n{text_from_file(name, data)[:30000]}"}
             except Exception:
                 log.exception("Could not read %s", name)
-                await msg.reply_text(f"I couldn't open {name}; the file may be damaged.")
+                await msg.reply_text(f"No pude abrir {name}; puede estar dañado.")
                 return
         else:
-            await msg.reply_text("I can read photos, PDFs, Word, Excel, PowerPoint and text files. "
-                                 "Big images: send them as a photo instead of a file.")
+            await msg.reply_text("Puedo leer fotos, PDF, Word, Excel, PowerPoint y archivos de texto. "
+                                 "Imágenes grandes: mandalas como foto, no como archivo.")
             return
         caption = msg.caption or ("(Sent without a comment. Work out what it is and help: e.g. "
                                   "translate it if it's in another language, or log it if it's a receipt.)")
@@ -457,15 +452,15 @@ class Bot:
         if ctx.args and ctx.args[0].lower() in voice.MODES:
             self.db.set("voice_replies", ctx.args[0].lower())
         await update.message.reply_text(
-            f"Spoken replies: {self.voice_mode()}\n\n"
-            "/voice auto – I answer voice messages with voice\n"
-            "/voice always – I always answer with voice too\n"
-            "/voice off – text only")
+            f"Respuestas con voz: {self.voice_mode()}\n\n"
+            "/voice auto – a los audios te contesto con audio\n"
+            "/voice always – siempre te contesto también con audio\n"
+            "/voice off – solo texto")
 
     async def on_button(self, update: Update, ctx):
         q = update.callback_query
         if not self.allowed(update):
-            await q.answer("Not allowed")
+            await q.answer("No permitido")
             return
         await q.answer()
         kind, ref = q.data.split(":", 1)
@@ -489,7 +484,7 @@ class Bot:
 
     async def job_reminders(self, ctx=None):
         for r in due_reminders(self.db):
-            await self.notify(f"⏰ Reminder: {r['text']}")
+            await self.notify(f"⏰ Recordatorio: {r['text']}")
 
     async def job_briefing(self, ctx=None):
         await self.run_scheduled(BRIEFING_PROMPT, BRIEFING_LABEL, use_history=False)
@@ -538,7 +533,7 @@ class Bot:
             try:  # the button next to the message field opens the voice page
                 await app.bot.set_chat_menu_button(
                     chat_id=self.config.owner_id,
-                    menu_button=MenuButtonWebApp("🎙 Talk", WebAppInfo(self.talk_url())))
+                    menu_button=MenuButtonWebApp("🎙 Hablar", WebAppInfo(self.talk_url())))
             except Exception:
                 log.exception("Could not set the voice page menu button")
 

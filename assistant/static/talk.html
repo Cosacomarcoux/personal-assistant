@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="sv">
+<html lang="es">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-<title>Prata med Ragnar</title>
+<title>Hablá con tu secretario</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
   :root {
@@ -42,10 +42,10 @@
 </head>
 <body>
 <main>
-  <div id="log"><div class="msg note">Tryck på mikrofonen och prata. Jag lyssnar tills du har pratat klart, svarar högt och lyssnar sedan igen.</div></div>
-  <div id="status">Tryck för att börja</div>
-  <button id="btn" aria-label="Prata">🎙</button>
-  <button id="stop">Avsluta samtalet</button>
+  <div id="log"><div class="msg note">Tocá el micrófono y hablá. Escucho hasta que termines, te contesto en voz alta y vuelvo a escuchar.</div></div>
+  <div id="status">Tocá para empezar</div>
+  <button id="btn" aria-label="Hablar">🎙</button>
+  <button id="stop">Terminar la charla</button>
 </main>
 <script>
 const tg = window.Telegram && window.Telegram.WebApp;
@@ -68,11 +68,11 @@ const mimeType = ["audio/webm;codecs=opus", "audio/mp4", "audio/webm", "audio/og
   .find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t));
 
 const LABELS = {
-  idle: ["🎙", "Tryck för att börja"],
-  listening: ["👂", "Jag lyssnar… (tryck för att pausa)"],
-  hearing: ["🔴", "Jag hör dig… (tryck för att skicka direkt)"],
-  thinking: ["💭", "Tänker…"],
-  speaking: ["🔊", "Pratar… (tryck för att avbryta)"],
+  idle: ["🎙", "Tocá para empezar"],
+  listening: ["👂", "Te escucho… (tocá para pausar)"],
+  hearing: ["🔴", "Te oigo… (tocá para enviar ya)"],
+  thinking: ["💭", "Pensando…"],
+  speaking: ["🔊", "Hablando… (tocá para cortar)"],
 };
 function setState(s) {
   state = s;
@@ -100,7 +100,7 @@ async function startConversation() {
       ctx.createMediaStreamSource(stream).connect(analyser);
     }
   } catch (e) {
-    add("note", "Jag fick inte använda mikrofonen. Tillåt mikrofonen för Telegram i telefonens inställningar och försök igen.");
+    add("note", "No pude usar el micrófono. Permitile el micrófono a Telegram en la configuración del celu y probá de nuevo.");
     return;
   }
   active = true;
@@ -157,11 +157,11 @@ async function send() {
     if (data.heard) add("you", data.heard);
     if (data.error) { add("note", data.error); if (res.status === 403) return endConversation(); }
     if (data.reply) add("ragnar", data.reply);
-    if (data.pending) add("note", "Godkänn eller avvisa i Telegram-chatten.");
-    if (data.files) add("note", "Filen finns i Telegram-chatten.");
+    if (data.pending) add("note", "Aprobá o rechazá en el chat de Telegram.");
+    if (data.files) add("note", "El archivo está en el chat de Telegram.");
     if (data.audio) return play(data.audio);
   } catch (e) {
-    add("note", "Kunde inte nå Ragnar. Kontrollera uppkopplingen.");
+    add("note", "No pude conectarme con tu secretario. Revisá la conexión.");
   }
   listen();
 }
@@ -177,7 +177,7 @@ async function play(b64) {
     source.onended = () => { source = null; if (state === "speaking") listen(); };
     source.start();
   } catch (e) {
-    add("note", "Kunde inte spela upp svaret.");
+    add("note", "No pude reproducir la respuesta.");
     listen();
   }
 }
@@ -190,7 +190,7 @@ btn.addEventListener("click", () => {
 });
 stopBtn.addEventListener("click", endConversation);
 if (!navigator.mediaDevices || !window.MediaRecorder) {
-  add("note", "Den här webbläsaren kan inte spela in ljud. Öppna sidan från Telegram på telefonen.");
+  add("note", "Este navegador no puede grabar audio. Abrí la página desde Telegram en el celu.");
 }
 setState("idle");
 </script>

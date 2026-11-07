@@ -1,7 +1,5 @@
 """Life admin: expenses and recurring bills."""
-from datetime import date
-
-from .base import Skill, Tool, schema
+from .base import Skill, Tool, schema, today
 
 TABLES = """
 CREATE TABLE IF NOT EXISTS expenses (
@@ -18,13 +16,13 @@ CREATE TABLE IF NOT EXISTS bills (
 def expense_add(a, ctx):
     eid = ctx.db.execute(
         "INSERT INTO expenses(day, amount, currency, category, description) VALUES(?,?,?,?,?)",
-        (a.get("date") or date.today().isoformat(), float(a["amount"]),
-         a.get("currency", "TWD"), a.get("category", "other"), a.get("description", "")))
+        (a.get("date") or today(ctx).isoformat(), float(a["amount"]),
+         a.get("currency") or ctx.config.currency, a.get("category", "other"), a.get("description", "")))
     return f"Expense #{eid} logged."
 
 
 def expense_summary(a, ctx):
-    month = a.get("month") or date.today().strftime("%Y-%m")
+    month = a.get("month") or today(ctx).strftime("%Y-%m")
     totals = ctx.db.query(
         "SELECT category, currency, ROUND(SUM(amount), 2) AS total, COUNT(*) AS n FROM expenses "
         "WHERE day LIKE ? GROUP BY category, currency ORDER BY total DESC", (month + "%",))
@@ -42,7 +40,7 @@ def expense_delete(a, ctx):
 def bill_add(a, ctx):
     bid = ctx.db.execute(
         "INSERT INTO bills(name, amount, currency, day_of_month, notes) VALUES(?,?,?,?,?)",
-        (a["name"], a.get("amount"), a.get("currency", "TWD"), int(a["day_of_month"]),
+        (a["name"], a.get("amount"), a.get("currency") or ctx.config.currency, int(a["day_of_month"]),
          a.get("notes", "")))
     return f"Bill #{bid} saved. It will appear in the daily briefing a few days before it's due."
 
@@ -62,7 +60,7 @@ class AdminSkill(Skill):
             name="Life admin (expenses & bills)",
             description="Track spending and recurring bills.",
             instructions=(
-                "Log expenses when the user mentions spending money. Default currency is TWD "
+                "Log expenses when the user mentions spending money, in the default currency "
                 "unless they say otherwise. Recurring bills (rent, phone, subscriptions) go in "
                 "bills; mention upcoming ones in the morning briefing."
             ),

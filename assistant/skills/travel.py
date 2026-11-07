@@ -129,7 +129,7 @@ class TravelSkill(Skill):
                              "travel_class": {"type": "string", "enum": list(CLASSES)},
                              "max_stops": {"type": "string", "enum": list(STOPS)},
                              "max_price": {"type": "number"},
-                             "currency": {"type": "string", "description": "e.g. SEK, TWD, EUR"},
+                             "currency": {"type": "string", "description": "e.g. ARS, USD, EUR"},
                              "sort": {"type": "string", "enum": ["price", "best"]},
                              "limit": {"type": "integer", "description": "Default 6"}},
                             ["from", "to", "depart_date"]), flights_search),

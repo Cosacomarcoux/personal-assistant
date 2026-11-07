@@ -19,8 +19,8 @@ def budget_set(a, ctx):
     ctx.db.execute("INSERT INTO budgets(category, monthly_limit, currency) VALUES(?,?,?) "
                    "ON CONFLICT(category) DO UPDATE SET monthly_limit=excluded.monthly_limit, "
                    "currency=excluded.currency",
-                   (a["category"].lower(), float(a["monthly_limit"]), a.get("currency", "TWD")))
-    return f"Budget for {a['category']}: {a['monthly_limit']} {a.get('currency', 'TWD')}/month."
+                   (a["category"].lower(), float(a["monthly_limit"]), a.get("currency") or ctx.config.currency))
+    return f"Budget for {a['category']}: {a['monthly_limit']} {a.get('currency') or ctx.config.currency}/month."
 
 
 def budget_status(a, ctx):
@@ -46,7 +46,7 @@ def budget_status(a, ctx):
 def savings_goal_add(a, ctx):
     gid = ctx.db.execute("INSERT INTO savings_goals(name, target, saved, currency, deadline) VALUES(?,?,?,?,?)",
                          (a["name"], float(a["target"]), float(a.get("saved", 0)),
-                          a.get("currency", "TWD"), a.get("deadline")))
+                          a.get("currency") or ctx.config.currency, a.get("deadline")))
     return f"Savings goal #{gid} created."
 
 

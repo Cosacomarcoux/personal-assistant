@@ -15,6 +15,7 @@ log = logging.getLogger(__name__)
 MAX_STEPS = 15  # safety limit on tool calls per message
 TOOL_TURNS = 5  # how many recent turns keep their tool calls + results in the history
 RESULT_CHARS = 1200  # stored length of each tool result
+STATUS_ES = {"done": "hecha", "rejected": "rechazada", "failed": "fallida"}
 
 
 @dataclass
@@ -49,6 +50,10 @@ You chat with them on Telegram, so keep answers short, friendly and easy to read
 Avoid markdown tables and headings; simple lists are fine.
 Your replies can also be read aloud as Telegram voice messages (by default voice messages
 get a spoken reply; see the Voice section for how to change the sound).
+
+Language: always reply in {self.config.language}, also in briefings, reminders and
+reviews, even when these instructions or tool results are in English.
+Default currency: {self.config.currency} (use it for money unless the user names another).
 
 Always interpret times in the user's timezone ({self.config.timezone}) unless told otherwise.
 The current date and time is given at the end of these instructions.
@@ -218,9 +223,9 @@ Rules:
             messages.append({"role": "user", "content": results})
             steps.append(calls)
         else:
-            final_text = final_text or "Sorry, that took too many steps. Could you break it down?"
+            final_text = final_text or "Perdón, eso llevó demasiados pasos. ¿Lo podés dividir en partes?"
 
-        final_text = final_text or "Done."
+        final_text = final_text or "Listo."
         if remember:
             note = f" [attached {len(attachments)} file(s)]" if attachments else ""
             self.db.add_message(chat_id, "user", (record_as or user_text) + note)
@@ -233,21 +238,21 @@ Rules:
     async def resolve_action(self, action_id: int, approve: bool) -> str:
         rows = self.db.query("SELECT * FROM pending_actions WHERE id=?", (action_id,))
         if not rows:
-            return "That action no longer exists."
+            return "Esa acción ya no existe."
         row = rows[0]
         if row["status"] != "pending":
-            return f"Already {row['status']}."
+            return f"Ya estaba {STATUS_ES.get(row['status'], row['status'])}."
         if not approve:
             self.db.execute("UPDATE pending_actions SET status='rejected' WHERE id=?", (action_id,))
             self.db.add_message(row["chat_id"], "assistant",
                                 f"(Action #{action_id} '{row['tool']}' was rejected by the user.)")
-            return "Rejected. Nothing was done."
+            return "Rechazada. No se hizo nada."
         tool = self.tools.get(row["tool"])
         if tool is None:
-            return "That tool is no longer available."
+            return "Esa herramienta ya no está disponible."
         result = await self.run_tool(tool, json.loads(row["args"]), row["chat_id"])
         status = "failed" if result.startswith("ERROR") else "done"
         self.db.execute("UPDATE pending_actions SET status=? WHERE id=?", (status, action_id))
         self.db.add_message(row["chat_id"], "assistant",
                             f"(Action #{action_id} '{row['tool']}' approved; result: {result[:500]})")
-        return ("Done ✅" if status == "done" else "It failed ❌") + f"\n{result[:1000]}"
+        return ("Hecho ✅" if status == "done" else "Falló ❌") + f"\n{result[:1000]}"

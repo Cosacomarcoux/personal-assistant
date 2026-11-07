@@ -67,8 +67,8 @@ def test_approval_flow(tmp_path):
     row = db.query("SELECT * FROM pending_actions")[0]
     assert row["status"] == "pending" and "a@b.com" in row["summary"]
     # Reject -> nothing executed
-    assert "Rejected" in asyncio.run(agent.resolve_action(1, approve=False))
-    assert "Already" in asyncio.run(agent.resolve_action(1, approve=True))
+    assert "Rechazada" in asyncio.run(agent.resolve_action(1, approve=False))
+    assert "Ya estaba rechazada" in asyncio.run(agent.resolve_action(1, approve=True))
 
 
 def test_approve_runs_tool(tmp_path):
@@ -77,7 +77,7 @@ def test_approve_runs_tool(tmp_path):
     agent.tools["gmail_send"].handler = lambda a, c: sent.update(a) or "Email sent."
     pid = db.execute("INSERT INTO pending_actions(chat_id, tool, args, summary) VALUES(1,'gmail_send','{\"to\":\"x\"}','s')")
     out = asyncio.run(agent.resolve_action(pid, approve=True))
-    assert out.startswith("Done") and sent == {"to": "x"}
+    assert out.startswith("Hecho") and sent == {"to": "x"}
 
 
 def test_tool_error_is_reported_not_crash(tmp_path):
@@ -96,6 +96,23 @@ def test_reminders_due(tmp_path):
     db.execute("INSERT INTO reminders(chat_id, text, due_at) VALUES(1,'call mom',?)", (past,))
     assert [r["text"] for r in due_reminders(db)] == ["call mom"]
     assert due_reminders(db) == []
+
+
+def test_repeating_reminders(tmp_path):
+    from assistant.skills.tasks import next_time
+    agent, db, client = make(tmp_path, [])
+    past = (datetime.now().astimezone() - timedelta(minutes=1)).replace(microsecond=0)
+    db.execute("INSERT INTO reminders(chat_id, text, due_at, repeat) VALUES(1,'pay salaries',?,'monthly')",
+               (past.isoformat(),))
+    assert [r["text"] for r in due_reminders(db)] == ["pay salaries"]
+    assert due_reminders(db) == []  # not twice
+    row = db.query("SELECT due_at, sent FROM reminders")[0]
+    assert row["sent"] == 0 and datetime.fromisoformat(row["due_at"]) == next_time(past, "monthly")
+    jan31 = datetime(2026, 1, 31, 9, 0)
+    assert next_time(jan31, "monthly") == datetime(2026, 2, 28, 9, 0)
+    assert next_time(datetime(2026, 12, 5, 9), "monthly") == datetime(2027, 1, 5, 9)
+    assert next_time(datetime(2028, 2, 29), "yearly") == datetime(2029, 2, 28)
+    assert next_time(datetime(2026, 11, 7), "weekly") == datetime(2026, 11, 14)
 
 
 def test_history_alternates(tmp_path):
@@ -153,7 +170,7 @@ class FakeCalendar:
             return NS(execute=lambda: {"items": self.events_by_cal[calendarId]})
 
         def insert(calendarId, body, sendUpdates):
-            self.inserted = calendarId
+            self.inserted, self.body = calendarId, body
             return NS(execute=lambda: {"htmlLink": "link"})
         return NS(list=list_, insert=insert)
 
@@ -181,7 +198,14 @@ def test_calendar_reads_all_calendars(tmp_path, monkeypatch):
     assert out[2]["calendar"] == "Familj" and out[2]["calendar_id"] == "fam123"
     assert "Broken" in out[3]["note"]
     gw.calendar_create_event({"title": "Picnic", "start": "2026-10-25T12:00", "calendar": "familj"}, ctx)
-    assert cal.inserted == "fam123"
+    assert cal.inserted == "fam123" and "recurrence" not in cal.body and "reminders" not in cal.body
+    gw.calendar_create_event({"title": "Cumple de Sofi", "start": "2026-03-14", "all_day": True,
+                              "repeat": "yearly", "remind_minutes_before": 900}, ctx)
+    assert cal.body["recurrence"] == ["RRULE:FREQ=YEARLY"] and cal.body["start"] == {"date": "2026-03-14"}
+    assert cal.body["reminders"] == {"useDefault": False, "overrides": [{"method": "popup", "minutes": 900}]}
+    summary = agent.tools["calendar_create_event"].summary(
+        {"title": "Sueldos", "start": "2026-12-05T09:00", "repeat": "monthly"})
+    assert "Se repite: todos los meses" in summary
 
 
 def test_fitness(tmp_path):
@@ -231,7 +255,7 @@ def test_blank_settings_use_defaults(monkeypatch):
     for name in ["MODEL", "TIMEZONE", "HISTORY_TURNS", "DATA_DIR", "ENABLED_SKILLS", "OWNER_TELEGRAM_ID"]:
         monkeypatch.setenv(name, "")
     cfg = Config()
-    assert cfg.model and cfg.timezone == "Asia/Taipei" and cfg.history_turns == 20
+    assert cfg.model and cfg.timezone == "America/Argentina/Buenos_Aires" and cfg.history_turns == 20
     assert "google" in cfg.enabled_skills and cfg.owner_id == 0 and str(cfg.data_dir) == "data"
 
 
@@ -406,7 +430,7 @@ def test_web_talk(tmp_path, monkeypatch):
     async def run():
         async with TestClient(TestServer(web.WebApp(bot).app)) as c:
             page = await c.get("/talk")
-            assert page.status == 200 and "Prata med Ragnar" in await page.text()
+            assert page.status == 200 and "Hablá con tu secretario" in await page.text()
             denied = await c.post("/api/talk", data=b"sound", headers={"Content-Type": "audio/webm"})
             assert denied.status == 403
             ok = await c.post("/api/talk", data=b"sound", headers={
@@ -479,7 +503,7 @@ def test_flights_search(tmp_path, monkeypatch):
     out = travel.flights_search({"from": "tpe, tsa", "to": "ARN", "depart_date": "2026-12-10",
                                  "return_date": "2027-01-05", "max_stops": "max_1"}, ctx)
     assert seen["departure_id"] == "TPE,TSA" and seen["type"] == 1 and seen["stops"] == 2
-    assert seen["currency"] == "SEK" and seen["sort_by"] == 2
+    assert seen["currency"] == "ARS" and seen["sort_by"] == 2
     cheapest = out["cheapest"][0]
     assert cheapest["price"] == 9800 and cheapest["stops"] == 1 and cheapest["layovers"] == ["IST 3h00"]
     assert cheapest["legs"][0] == "TPE 23:00 → IST 06:00 (TK 25, 13h00)"
@@ -1013,7 +1037,7 @@ def test_teams_chat_and_approval(tmp_path, monkeypatch):
     sent_mail = []
     bot.agent.tools["gmail_send"].handler = lambda a, c: sent_mail.append(a) or "Email sent."
     asyncio.run(bot.teams.process(_activity("", value=approve)))  # the ✅ button
-    assert sent_mail and _texts()[-1].startswith("Done")
+    assert sent_mail and _texts()[-1].startswith("Hecho")
 
 
 def test_teams_commands_and_files(tmp_path, monkeypatch):
@@ -1024,7 +1048,7 @@ def test_teams_commands_and_files(tmp_path, monkeypatch):
         ([text("Här är rapporten.")], "end_turn"),
     ])
     asyncio.run(bot.teams.process(_activity("skills")))
-    assert _texts()[-1].startswith("Skills switched on")
+    assert _texts()[-1].startswith("Funciones activadas")
     asyncio.run(bot.teams.process(_activity("/briefing")))
     assert "morning briefing" in bot.agent.client.calls[0]["messages"][-1]["content"]
     assert bot.db.history(1, 10)[0]["content"] == "(Asked for my morning briefing.)"
@@ -1080,7 +1104,7 @@ def test_teams_reminder_is_delivered(tmp_path, monkeypatch):
     past = (datetime.now().astimezone() - timedelta(minutes=1)).isoformat()
     bot.db.execute("INSERT INTO reminders(chat_id, text, due_at) VALUES(1,'ring mamma',?)", (past,))
     asyncio.run(bot.job_reminders())
-    assert _texts() == ["⏰ Reminder: ring mamma"]
+    assert _texts() == ["⏰ Recordatorio: ring mamma"]
 
 
 class PagedCalendar:
@@ -1135,8 +1159,8 @@ def test_approve_all(tmp_path):
     asyncio.run(agent.resolve_action(reply.pending_ids[0], approve=True))  # one tapped by hand first
     summary = asyncio.run(main.Bot.resolve_batch(bot, token, approve=True))
     assert sorted(deleted) == ["e0", "e1", "e2"]  # each runs exactly once
-    assert summary.startswith("Done ✅ 2 of 3.") and "1 already handled" in summary
-    assert "Rejected 0 of 3" in asyncio.run(main.Bot.resolve_batch(bot, token, approve=False))
+    assert summary.startswith("Hecho ✅ 2 de 3.") and "1 ya estaban resueltas" in summary
+    assert "Rechacé 0 de 3" in asyncio.run(main.Bot.resolve_batch(bot, token, approve=False))
 
 
 def test_teams_approve_all_card(tmp_path, monkeypatch):
@@ -1151,7 +1175,7 @@ def test_teams_approve_all_card(tmp_path, monkeypatch):
     approve_all = batch["actions"][0]
     assert approve_all["title"] == "✅ Approve all 2" and deleted == []
     asyncio.run(bot.teams.process(_activity("", value=approve_all["data"])))
-    assert sorted(deleted) == ["e0", "e1"] and _texts()[-1].startswith("Done ✅ 2 of 2.")
+    assert sorted(deleted) == ["e0", "e1"] and _texts()[-1].startswith("Hecho ✅ 2 de 2.")
 
 
 def test_honesty_rules_in_prompt(tmp_path):
@@ -1174,6 +1198,6 @@ def test_telegram_shows_approve_all(tmp_path):
     asyncio.run(bot.send_approvals(1, ids, NS(send_message=send_message)))
     assert len(sent) == 26  # one per action, then one for all
     buttons = sent[-1][1].inline_keyboard[0]
-    assert buttons[0].text == "✅ Approve all 25" and buttons[0].callback_data.startswith("okall:")
+    assert buttons[0].text == "✅ Aprobar las 25" and buttons[0].callback_data.startswith("okall:")
     assert all(len(b.callback_data.encode()) <= 64 for b in buttons)
     assert bot.db.get("batch:" + buttons[0].callback_data.split(":")[1]) == ids

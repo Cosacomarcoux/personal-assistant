@@ -25,15 +25,18 @@ class Config:
     # Only this Telegram user may talk to the bot. Leave empty on first run:
     # the bot will tell you your ID.
     owner_id: int = field(default_factory=lambda: int(_env("OWNER_TELEGRAM_ID", "0")))
-    timezone: str = field(default_factory=lambda: _env("TIMEZONE", "Asia/Taipei"))
-    assistant_name: str = field(default_factory=lambda: _env("ASSISTANT_NAME", "Jarvis"))
-    owner_name: str = field(default_factory=lambda: _env("OWNER_NAME", "Fabian"))
+    timezone: str = field(default_factory=lambda: _env("TIMEZONE", "America/Argentina/Buenos_Aires"))
+    assistant_name: str = field(default_factory=lambda: _env("ASSISTANT_NAME", "Secretario"))
+    owner_name: str = field(default_factory=lambda: _env("OWNER_NAME", "Roberto"))
     # Comma-separated list of skills to switch on.
     enabled_skills: list[str] = field(
         default_factory=lambda: _list(_env("ENABLED_SKILLS", "google,outlook,tasks,research,admin,fitness,travel,onedrive,study,writing,ideas,content,career,budget,nutrition,habits,people,journal"))
     )
+    # Language for every reply (also the briefing and reminders).
+    language: str = field(default_factory=lambda: _env(
+        "LANGUAGE", "Spanish from Argentina (rioplatense: use 'vos', natural and direct)"))
     # Daily briefing time, HH:MM in your timezone. "off" = no briefing.
-    briefing_time: str = field(default_factory=lambda: _env("BRIEFING_TIME", "07:30"))
+    briefing_time: str = field(default_factory=lambda: _env("BRIEFING_TIME", "07:00"))
     # Weekly training review, sent on Sundays at HH:MM (needs the fitness skill). "off" = none.
     weekly_review_time: str = field(default_factory=lambda: _env("WEEKLY_REVIEW_TIME", "19:00"))
     google_client_id: str = field(default_factory=lambda: _env("GOOGLE_CLIENT_ID", ""))
@@ -43,7 +46,7 @@ class Config:
     strava_client_secret: str = field(default_factory=lambda: _env("STRAVA_CLIENT_SECRET", ""))
     # Flight and hotel prices (Google Flights/Hotels via serpapi.com, free tier ~250 searches/month)
     serpapi_api_key: str = field(default_factory=lambda: _env("SERPAPI_API_KEY", ""))
-    currency: str = field(default_factory=lambda: _env("CURRENCY", "SEK"))
+    currency: str = field(default_factory=lambda: _env("CURRENCY", "ARS"))
     # Microsoft (Outlook mail + calendar, OneDrive) - connect with /connect_microsoft
     ms_client_id: str = field(default_factory=lambda: _env("MS_CLIENT_ID", ""))
     ms_tenant: str = field(default_factory=lambda: _env("MS_TENANT", "common"))
