@@ -111,7 +111,8 @@ class TasksSkill(Skill):
                 "Use tasks for things to do, reminders for 'remind me at/in ...'. Repeating "
                 "things ('every 5th', 'every Monday') get repeat. "
                 "Convert relative times ('in 2 hours', 'tomorrow 9') to ISO datetimes "
-                "using the current date and time."
+                "using the current date and time. The user can also tick tasks off with ✅ "
+                "buttons (/tasks); those ticks show up in the history."
             ),
             tools=[
                 Tool("task_add", "Add a to-do item.",

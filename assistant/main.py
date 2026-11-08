@@ -4,7 +4,7 @@ import base64
 import logging
 import secrets
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from datetime import time as dtime
 from zoneinfo import ZoneInfo
 
@@ -81,7 +81,7 @@ También podés mandarme audios, y te contesto con audio.
 
 Comandos:
 /briefing – tu resumen del día ahora
-/tasks – tus pendientes
+/tasks – tus pendientes (tocá ✅ para tacharlos)
 /connect_google – conectar Gmail, Calendar y Drive
 /skills – qué puedo hacer
 /talk – modo manos libres
@@ -173,6 +173,63 @@ class Bot:
         if failed:
             lines.append("Fallaron ❌:\n" + "\n".join(failed))
         return "\n".join(lines)
+
+    # ------------------------------------------------- task & reminder buttons
+    def tasks_on(self) -> bool:
+        return "tasks" in self.config.enabled_skills
+
+    def task_keyboard(self) -> tuple[str, InlineKeyboardMarkup | None]:
+        """Open tasks, one ✅ button each: tapping one ticks it off."""
+        rows = self.db.query("SELECT id, title FROM tasks WHERE done=0 "
+                             "ORDER BY due IS NULL, due, id LIMIT 20")
+        if not rows:
+            return "No tenés pendientes. ¡Todo hecho! 🎉", None
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"✅ {r['title'][:55]}",
+                                                         callback_data=f"task:{r['id']}")]
+                                   for r in rows])
+        return f"Tus pendientes ({len(rows)}). Tocá uno cuando lo termines:", kb
+
+    def complete_task(self, task_id: int) -> str | None:
+        """Ticks a task off; returns its title, or None if it was gone or already done."""
+        rows = self.db.query("SELECT title FROM tasks WHERE id=? AND done=0", (task_id,))
+        if not rows:
+            return None
+        self.db.execute("UPDATE tasks SET done=1 WHERE id=?", (task_id,))
+        # so the assistant knows, e.g. when asked "what's left?"
+        self.db.add_message(self.home_chat, "assistant",
+                            f"(Tarea #{task_id} '{rows[0]['title']}' marcada como hecha con el botón.)")
+        return rows[0]["title"]
+
+    async def send_task_buttons(self, bot, chat_id: int) -> None:
+        if not self.tasks_on():
+            return
+        text, kb = self.task_keyboard()
+        if kb:
+            await bot.send_message(chat_id, text, reply_markup=kb)
+
+    def snooze(self, reminder_id: int, hours: int = 1) -> datetime | None:
+        """A new one-off reminder with the same text; a repeating original keeps its schedule."""
+        rows = self.db.query("SELECT text FROM reminders WHERE id=?", (reminder_id,))
+        if not rows:
+            return None
+        when = (datetime.now(ZoneInfo(self.config.timezone)) + timedelta(hours=hours)).replace(second=0, microsecond=0)
+        self.db.execute("INSERT INTO reminders(chat_id, text, due_at) VALUES(?,?,?)",
+                        (self.home_chat, rows[0]["text"], when.isoformat()))
+        return when
+
+    async def on_task_buttons(self, q, kind: str, ref: str) -> None:
+        text = q.message.text or ""
+        if kind == "task":
+            title = self.complete_task(int(ref))
+            body, kb = self.task_keyboard()
+            done = f"✔ Hecho: {title}\n\n" if title else ""
+            await q.edit_message_text(done + body, reply_markup=kb)
+        elif kind == "rdone":
+            await q.edit_message_text(f"{text}\n\n✅ Hecho")
+        elif kind == "rsnz":
+            when = self.snooze(int(ref))
+            note = f"⏰ Te lo recuerdo de nuevo a las {when:%H:%M}" if when else "Ese recordatorio ya no existe."
+            await q.edit_message_text(f"{text}\n\n{note}")
 
     # ------------------------------------------------ shared by all apps
     def link_secret(self) -> str:
@@ -345,13 +402,19 @@ class Bot:
             await update.message.reply_text("Funciones activadas:\n" + "\n".join(lines))
 
     async def on_tasks(self, update: Update, ctx):
-        if await self.guard(update):
+        if not await self.guard(update):
+            return
+        if not self.tasks_on():
             await self.ask_agent(update.effective_chat.id, "Mostrame mis pendientes abiertos.", ctx.bot)
+            return
+        text, kb = self.task_keyboard()
+        await update.message.reply_text(text, reply_markup=kb)
 
     async def on_briefing(self, update: Update, ctx):
         if await self.guard(update):
             await self.ask_agent(update.effective_chat.id, self.briefing, ctx.bot,
                                  use_history=False, record_as=BRIEFING_LABEL)
+            await self.send_task_buttons(ctx.bot, update.effective_chat.id)
 
     def talk_url(self) -> str:
         return f"{self.config.web_url}/talk"
@@ -482,6 +545,12 @@ class Bot:
             return
         await q.answer()
         kind, ref = q.data.split(":", 1)
+        if kind in ("task", "rdone", "rsnz"):
+            try:
+                await self.on_task_buttons(q, kind, ref)
+            except Exception:  # e.g. the message was too old to edit
+                log.exception("Button %s failed", q.data)
+            return
         if kind in ("okall", "noall"):
             result = await self.resolve_batch(ref, approve=kind == "okall")
         else:
@@ -502,10 +571,26 @@ class Bot:
 
     async def job_reminders(self, ctx=None):
         for r in due_reminders(self.db):
-            await self.notify(f"⏰ Recordatorio: {r['text']}")
+            await self.notify_reminder(r)
+
+    async def notify_reminder(self, r: dict) -> None:
+        text = f"⏰ Recordatorio: {r['text']}"[:4000]
+        for target in self.targets():
+            if target == "telegram":
+                kb = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("✅ Hecho", callback_data=f"rdone:{r['id']}"),
+                    InlineKeyboardButton("⏰ En 1 hora", callback_data=f"rsnz:{r['id']}")]])
+                await self.app.bot.send_message(self.config.owner_id, text, reply_markup=kb)
+            else:
+                await self.teams.send_text(text)
 
     async def job_briefing(self, ctx=None):
         await self.run_scheduled(self.briefing, BRIEFING_LABEL, use_history=False)
+        if "telegram" in self.targets():
+            try:
+                await self.send_task_buttons(self.app.bot, self.config.owner_id)
+            except Exception:
+                log.exception("Could not send the task buttons")
 
     async def job_weekly_review(self, ctx=None):
         await self.run_scheduled(WEEKLY_REVIEW_PROMPT, REVIEW_LABEL)

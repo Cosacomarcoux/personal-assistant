@@ -1208,3 +1208,64 @@ def test_briefing_only_asks_about_enabled_skills():
     text = briefing_prompt(["google", "tasks", "people", "content"])
     assert "calendar" in text and "birthdays" in text and "content to film" in text
     assert "flashcards" not in text and "workout" not in text and "job application" not in text
+
+
+class FakeQuery:
+    """Just enough of a Telegram button press."""
+    def __init__(self, data, text=""):
+        self.data, self.message, self.edits = data, NS(text=text), []
+
+    async def edit_message_text(self, text, reply_markup=None):
+        self.edits.append((text, reply_markup))
+
+
+def test_task_buttons_tick_off_tasks(tmp_path):
+    from assistant import main
+    cfg = Config()
+    cfg.data_dir = tmp_path
+    cfg.owner_id = 7
+    bot = main.Bot(cfg)
+    for title in ["Editar video del gym", "Asistencia entrenadores"]:
+        bot.db.execute("INSERT INTO tasks(title) VALUES(?)", (title,))
+    text, kb = bot.task_keyboard()
+    assert "(2)" in text and kb.inline_keyboard[0][0].text == "✅ Editar video del gym"
+    assert kb.inline_keyboard[0][0].callback_data == "task:1"
+    q = FakeQuery("task:1")
+    asyncio.run(bot.on_task_buttons(q, "task", "1"))
+    edited, kb = q.edits[0]
+    assert edited.startswith("✔ Hecho: Editar video del gym") and len(kb.inline_keyboard) == 1
+    assert bot.db.query("SELECT done FROM tasks WHERE id=1")[0]["done"] == 1
+    assert "marcada como hecha" in bot.db.history(7, 5)[-1]["content"]  # the assistant knows
+    asyncio.run(bot.on_task_buttons(FakeQuery("task:1"), "task", "1"))  # double tap: no harm
+    assert bot.complete_task(2) == "Asistencia entrenadores"
+    assert bot.task_keyboard() == ("No tenés pendientes. ¡Todo hecho! 🎉", None)
+
+
+def test_reminder_buttons(tmp_path):
+    from datetime import datetime, timedelta
+    from assistant import main
+    cfg = Config()
+    cfg.data_dir = tmp_path
+    cfg.owner_id = 7
+    bot = main.Bot(cfg)
+    sent = []
+
+    async def send_message(chat_id, text, reply_markup=None):
+        sent.append((text, reply_markup))
+    bot.app = NS(bot=NS(send_message=send_message))
+    past = (datetime.now().astimezone() - timedelta(minutes=1)).isoformat()
+    bot.db.execute("INSERT INTO reminders(chat_id, text, due_at) VALUES(7,'Partido vs OLRC',?)", (past,))
+    asyncio.run(bot.job_reminders())
+    text, kb = sent[0]
+    assert text == "⏰ Recordatorio: Partido vs OLRC"
+    assert [b.callback_data for b in kb.inline_keyboard[0]] == ["rdone:1", "rsnz:1"]
+    q = FakeQuery("rsnz:1", text)
+    asyncio.run(bot.on_task_buttons(q, "rsnz", "1"))
+    assert "Te lo recuerdo de nuevo a las" in q.edits[0][0]
+    again = bot.db.query("SELECT text, due_at, sent FROM reminders WHERE id=2")[0]
+    assert again["text"] == "Partido vs OLRC" and again["sent"] == 0
+    minutes = (datetime.fromisoformat(again["due_at"]) - datetime.now().astimezone()).total_seconds() / 60
+    assert 58 <= minutes <= 60
+    q = FakeQuery("rdone:1", text)
+    asyncio.run(bot.on_task_buttons(q, "rdone", "1"))
+    assert q.edits[0][0].endswith("✅ Hecho")
