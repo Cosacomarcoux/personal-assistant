@@ -1201,3 +1201,10 @@ def test_telegram_shows_approve_all(tmp_path):
     assert buttons[0].text == "✅ Aprobar las 25" and buttons[0].callback_data.startswith("okall:")
     assert all(len(b.callback_data.encode()) <= 64 for b in buttons)
     assert bot.db.get("batch:" + buttons[0].callback_data.split(":")[1]) == ids
+
+
+def test_briefing_only_asks_about_enabled_skills():
+    from assistant.main import briefing_prompt
+    text = briefing_prompt(["google", "tasks", "people", "content"])
+    assert "calendar" in text and "birthdays" in text and "content to film" in text
+    assert "flashcards" not in text and "workout" not in text and "job application" not in text

@@ -26,16 +26,33 @@ logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s", le
 logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("assistant")
 
-BRIEFING_PROMPT = (
-    "Give me my morning briefing. Check: today's calendar events, important unread emails "
-    "from the last 24 hours (skip newsletters/promotions), open tasks that are due soon or "
-    "overdue, recurring bills due in the next 5 days, today's planned workout (if a training "
-    "program is set), and anything else due soon that you can see: flashcards due, content "
-    "to film or publish, job application deadlines within a week, birthdays within a week, "
-    "habits to do today and budget categories close to their limit. Keep it short and "
-    "scannable, then suggest the 1-3 most important things to do today. Skip any part that "
-    "has nothing in it or whose account isn't connected."
-)
+# What the morning briefing checks, per skill. Only switched-on skills are asked about,
+# so the briefing never lists things the assistant can't see.
+BRIEFING_PARTS = [
+    ("google", "today's calendar events and important unread emails from the last 24 hours "
+               "(skip newsletters/promotions)"),
+    ("outlook", "today's Outlook events and important Outlook emails"),
+    ("tasks", "open tasks that are due soon or overdue, and today's reminders"),
+    ("admin", "recurring bills due in the next 5 days"),
+    ("fitness", "today's planned workout"),
+    ("study", "flashcards due"),
+    ("content", "content to film or publish"),
+    ("career", "job application deadlines within a week"),
+    ("people", "birthdays within a week"),
+    ("habits", "habits to do today"),
+    ("budget", "budget categories close to their limit"),
+]
+
+
+def briefing_prompt(enabled: list[str]) -> str:
+    parts = [text for skill, text in BRIEFING_PARTS if skill in enabled]
+    return ("Give me my morning briefing. Check: " + "; ".join(parts) + ". "
+            "Keep it short and scannable, then suggest the 1-3 most important things to do "
+            "today. Only mention what has something in it: leave out empty parts, accounts "
+            "that aren't connected and anything you couldn't check, without listing them.")
+
+
+BRIEFING_PROMPT = briefing_prompt([skill for skill, _ in BRIEFING_PARTS])
 BRIEFING_LABEL = "(Asked for my morning briefing.)"
 REVIEW_LABEL = "(Asked for my weekly training review.)"
 
@@ -87,6 +104,7 @@ class Bot:
         self.db = DB(config.data_dir / "assistant.db")
         self.skills = load_skills(config.enabled_skills, self.db, config)
         self.agent = Agent(config, self.db, self.skills)
+        self.briefing = briefing_prompt(config.enabled_skills)
         self.app = None    # Telegram application, when Telegram is set up
         self.teams = None  # Teams front-end, when Teams is set up
         self.web = None
@@ -255,7 +273,7 @@ class Bot:
     def prompt_for(self, text: str):
         """Commands that are answered by the assistant: (prompt, saved as, use history)."""
         cmd = text.split()[0].lstrip("/").lower() if text.strip() else ""
-        return {"briefing": (BRIEFING_PROMPT, BRIEFING_LABEL, False),
+        return {"briefing": (self.briefing, BRIEFING_LABEL, False),
                 "review": (WEEKLY_REVIEW_PROMPT, REVIEW_LABEL, None),
                 "tasks": ("Mostrame mis pendientes abiertos.", None, None)}.get(cmd)
 
@@ -332,7 +350,7 @@ class Bot:
 
     async def on_briefing(self, update: Update, ctx):
         if await self.guard(update):
-            await self.ask_agent(update.effective_chat.id, BRIEFING_PROMPT, ctx.bot,
+            await self.ask_agent(update.effective_chat.id, self.briefing, ctx.bot,
                                  use_history=False, record_as=BRIEFING_LABEL)
 
     def talk_url(self) -> str:
@@ -487,7 +505,7 @@ class Bot:
             await self.notify(f"⏰ Recordatorio: {r['text']}")
 
     async def job_briefing(self, ctx=None):
-        await self.run_scheduled(BRIEFING_PROMPT, BRIEFING_LABEL, use_history=False)
+        await self.run_scheduled(self.briefing, BRIEFING_LABEL, use_history=False)
 
     async def job_weekly_review(self, ctx=None):
         await self.run_scheduled(WEEKLY_REVIEW_PROMPT, REVIEW_LABEL)
